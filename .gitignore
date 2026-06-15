@@ -1,13 +1,42 @@
-*.db
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.pyo
+*.py[codz]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Unit test / coverage reports
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Environments
 .env
+.envrc
 .venv
 venv/
-*.egg-info/
-dist/
-build/
-.pytest_cache/
+env/
+ENV/
+
+# SQLite databases
+*.db
+
+# PyCharm
 .idea/
+
+# Claude Code local settings
 .claude/settings.local.json
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
