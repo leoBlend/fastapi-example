@@ -77,8 +77,6 @@ def test_create_user_success(client, db):
 
 
 def test_create_user_duplicate_username(client, test_user):
-    from sqlalchemy.exc import IntegrityError
-
     payload = {
         "username": "testuser",
         "email": "other@example.com",
@@ -88,8 +86,9 @@ def test_create_user_duplicate_username(client, test_user):
         "role": "user",
         "phone_number": "555-999-9999",
     }
-    with pytest.raises(IntegrityError):
-        client.post("/auth/", json=payload)
+    response = client.post("/auth/", json=payload)
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Username or email already registered"
 
 
 def test_login_success(client, test_user):

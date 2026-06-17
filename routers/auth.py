@@ -1,15 +1,19 @@
+import logging
 from datetime import timedelta, datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from starlette import status
 
 from database import SessionLocal
 from models import Users
 from passlib.context import CryptContext
 from jose import jwt, JWTError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -67,7 +71,7 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
 
         return {'username': username, 'id': user_id, 'user_role': user_role}
     except JWTError:
-        return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail ='Could not decode jwt token')
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Could not validate user')
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_user(db: db_dependency, create_user_request: CreateUserRequest):
@@ -82,9 +86,15 @@ async def create_user(db: db_dependency, create_user_request: CreateUserRequest)
         phone_number=create_user_request.phone_number,
         )
 
-    db.add(create_user_model)
-    db.commit()
+    try:
+        db.add(create_user_model)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.warning("Registration failed — duplicate username or email: %s", create_user_request.username)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username or email already registered")
 
+    logger.info("New user registered: %s", create_user_request.username)
     return create_user_model
 
 @router.post("/token", response_model=Token)
@@ -93,8 +103,9 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
     user = authenticate_user(form_data.username, form_data.password, db)
 
     if not user:
+        logger.warning("Failed login attempt for username: %s", form_data.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not retrieve user.")
 
     token = create_access_token(form_data.username, user.id, timedelta(minutes=30), user.role)
-
+    logger.info("User logged in: %s", form_data.username)
     return {'access_token': token, 'token_type': 'bearer'}

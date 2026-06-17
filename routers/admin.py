@@ -1,4 +1,6 @@
+import logging
 from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Path
 from starlette import status
 
@@ -6,6 +8,7 @@ from models import Todos
 from database import SessionLocal
 from .auth import get_current_user
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/admin",
@@ -26,6 +29,7 @@ user_dependency = Annotated[dict, Depends(get_current_user)]
 async def read_all(user: user_dependency, db: db_dependency):
     if user is None or user.get('user_role') != 'admin':
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User doesn't exist")
+    logger.info("Admin %s fetched all todos", user.get('username'))
     return db.query(Todos).all()
 
 
@@ -35,6 +39,8 @@ async def delete_todo(user: user_dependency, db: db_dependency, todo_id: int = P
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User doesn't exist")
     todo_model = db.query(Todos).filter(Todos.id == todo_id).first()
     if not todo_model:
+        logger.warning("Admin %s tried to delete non-existent todo %d", user.get('username'), todo_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Todo not found.')
     db.query(Todos).filter(Todos.id == todo_id).delete()
     db.commit()
+    logger.info("Admin %s deleted todo %d", user.get('username'), todo_id)

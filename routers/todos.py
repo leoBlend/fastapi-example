@@ -1,4 +1,6 @@
+import logging
 from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel, Field
 from starlette import status
@@ -6,6 +8,8 @@ from starlette import status
 from models import Todos
 from database import SessionLocal
 from .auth import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -39,6 +43,7 @@ async def read_todo(user: user_dependency, db: db_dependency, todo_id: int = Pat
     todo_model = db.query(Todos).filter(Todos.id == todo_id, Todos.owner_id == user.get('id')).first()
 
     if not todo_model:
+        logger.warning("Todo %d not found for user %s", todo_id, user.get('username'))
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Todo not found.')
     return todo_model
 
@@ -51,6 +56,7 @@ async def create_todo(user: user_dependency, db: db_dependency, todo_request: To
 
     db.add(todo_model)
     db.commit()
+    logger.info("Todo created by user %s: '%s'", user.get('username'), todo_request.title)
 
 @router.put("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def update_todo(user: user_dependency, db: db_dependency, todo_request: TodoRequest, todo_id: int = Path(gt=0)):
@@ -60,6 +66,7 @@ async def update_todo(user: user_dependency, db: db_dependency, todo_request: To
     todo_model = db.query(Todos).filter(Todos.id == todo_id, Todos.owner_id == user.get('id')).first()
 
     if not todo_model:
+        logger.warning("Update failed — todo %d not found for user %s", todo_id, user.get('username'))
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Todo not found.')
 
     todo_model.title = todo_request.title
@@ -69,6 +76,7 @@ async def update_todo(user: user_dependency, db: db_dependency, todo_request: To
 
     db.add(todo_model)
     db.commit()
+    logger.info("Todo %d updated by user %s", todo_id, user.get('username'))
 
 @router.delete("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_todo(user: user_dependency, db: db_dependency, todo_id: int = Path(gt=0)):
@@ -78,7 +86,9 @@ async def delete_todo(user: user_dependency, db: db_dependency, todo_id: int = P
     todo_model = db.query(Todos).filter(Todos.id == todo_id, Todos.owner_id == user.get('id')).first()
 
     if not todo_model:
+        logger.warning("Delete failed — todo %d not found for user %s", todo_id, user.get('username'))
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Todo not found.')
 
     db.query(Todos).filter(Todos.id == todo_id).delete()
     db.commit()
+    logger.info("Todo %d deleted by user %s", todo_id, user.get('username'))
