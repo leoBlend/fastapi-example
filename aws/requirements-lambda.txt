@@ -1,0 +1,7 @@
+# Lambda dependencies — no FastAPI, SQLAlchemy, or Alembic needed
+# These packages must be available in the Lambda execution environment.
+# For SAM deployment, add them to a Lambda Layer or bundle them in the function zip.
+
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+boto3>=1.34.0           # Only used when USE_LOCAL_DYNAMO=false; excluded from layer if local-only

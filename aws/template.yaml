@@ -1,0 +1,412 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: TodoApp — Lambda + API Gateway + DynamoDB
+
+# ---------------------------------------------------------------------------
+# BEFORE DEPLOYING:
+#   1. Set JWT_SECRET_KEY — replace the placeholder below or use AWS SSM:
+#      aws ssm put-parameter --name /todoapp/jwt_secret --value "your-secret" --type SecureString
+#   2. Run: sam build && sam deploy --guided
+#   3. AWS credentials must be configured: aws configure
+# ---------------------------------------------------------------------------
+
+Parameters:
+  JwtSecretKey:
+    Type: String
+    Description: "Secret key for JWT signing. Use a long random string."
+    NoEcho: true
+    # To use SSM instead: Type: AWS::SSM::Parameter::Value<String>
+    #                      Default: /todoapp/jwt_secret
+
+Globals:
+  Function:
+    Runtime: python3.12
+    CodeUri: .
+    Timeout: 10
+    MemorySize: 256
+    Tracing: Active  # X-Ray tracing
+    Environment:
+      Variables:
+        USE_LOCAL_DYNAMO: "false"
+        JWT_SECRET_KEY: !Ref JwtSecretKey
+        JWT_ALGORITHM: "HS256"
+        JWT_EXPIRE_MINUTES: "30"
+        DYNAMO_TABLE_USERS: !Ref UsersTable
+        DYNAMO_TABLE_TODOS: !Ref TodosTable
+        DYNAMO_TABLE_AUDIT: !Ref AuditTable
+    Layers:
+      - !Ref SharedLayer
+
+Resources:
+
+  # --------------------------------------------------------------------------
+  # Shared Lambda Layer (passlib, python-jose, shared/ code)
+  # --------------------------------------------------------------------------
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: TodoAppShared
+      Description: Shared utilities and Python dependencies
+      ContentUri: .
+      CompatibleRuntimes:
+        - python3.12
+      RetentionPolicy: Delete
+
+  # --------------------------------------------------------------------------
+  # DynamoDB Tables
+  # --------------------------------------------------------------------------
+
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: TodoApp-Users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: username
+          AttributeType: S
+        - AttributeName: email
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: username
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: EmailIndex
+          KeySchema:
+            - AttributeName: email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: UserIdIndex
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  TodosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: TodoApp-Todos
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: todo_id
+          AttributeType: S
+        - AttributeName: owner_id
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: todo_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: OwnerIndex
+          KeySchema:
+            - AttributeName: owner_id
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  AuditTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: TodoApp-AuditLog
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: audit_id
+          AttributeType: S
+        - AttributeName: entity_type
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: audit_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: TimestampIndex
+          KeySchema:
+            - AttributeName: entity_type
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # --------------------------------------------------------------------------
+  # HTTP API Gateway
+  # --------------------------------------------------------------------------
+  TodoApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: "$default"
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - "Authorization"
+          - "Content-Type"
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+
+  # --------------------------------------------------------------------------
+  # IAM Role (shared by all Lambda functions)
+  # --------------------------------------------------------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: TodoAppLambdaRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt UsersTable.Arn
+                  - !Sub "${UsersTable.Arn}/index/*"
+                  - !GetAtt TodosTable.Arn
+                  - !Sub "${TodosTable.Arn}/index/*"
+                  - !GetAtt AuditTable.Arn
+                  - !Sub "${AuditTable.Arn}/index/*"
+
+  # --------------------------------------------------------------------------
+  # Lambda Functions
+  # --------------------------------------------------------------------------
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-Health
+      Handler: handlers/health.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /healthy
+            Method: GET
+
+  AuthRegisterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-AuthRegister
+      Handler: handlers/auth_register.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /auth/
+            Method: POST
+
+  AuthLoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-AuthLogin
+      Handler: handlers/auth_login.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /auth/token
+            Method: POST
+
+  TodosListFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-TodosList
+      Handler: handlers/todos_list.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /
+            Method: GET
+
+  TodosGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-TodosGet
+      Handler: handlers/todos_get.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /todos/{todo_id}
+            Method: GET
+
+  TodosCreateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-TodosCreate
+      Handler: handlers/todos_create.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /todo
+            Method: POST
+
+  TodosUpdateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-TodosUpdate
+      Handler: handlers/todos_update.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /todos/{todo_id}
+            Method: PUT
+
+  TodosDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-TodosDelete
+      Handler: handlers/todos_delete.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /todos/{todo_id}
+            Method: DELETE
+
+  UsersGetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-UsersGet
+      Handler: handlers/users_get.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /users/
+            Method: GET
+
+  UsersPasswordFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-UsersPassword
+      Handler: handlers/users_password.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /users/password
+            Method: PUT
+
+  UsersPhoneFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-UsersPhone
+      Handler: handlers/users_phone.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /users/change_phone_number/{phone_number}
+            Method: PUT
+
+  AdminTodosFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-AdminTodos
+      Handler: handlers/admin_todos.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /admin/todo
+            Method: GET
+
+  AdminDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-AdminDelete
+      Handler: handlers/admin_delete.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /admin/todo/{todo_id}
+            Method: DELETE
+
+  AdminAuditFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: TodoApp-AdminAudit
+      Handler: handlers/admin_audit.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TodoApi
+            Path: /admin/audit
+            Method: GET
+
+  # --------------------------------------------------------------------------
+  # CloudWatch Log Groups (explicit retention policy — default never expires)
+  # --------------------------------------------------------------------------
+  # Add one LogGroup per function to set RetentionInDays.
+  # SAM/CloudFormation will create the groups automatically if omitted,
+  # but without retention policy (logs accumulate indefinitely).
+  HealthLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/TodoApp-Health
+      RetentionInDays: 30
+
+  # (Add similar LogGroup resources for each function in production)
+
+Outputs:
+  ApiUrl:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${TodoApi}.execute-api.${AWS::Region}.amazonaws.com"
