@@ -1,13 +1,14 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
 from pydantic import BaseModel, Field
 from starlette import status
 
 from models import Todos
 from database import SessionLocal
 from .auth import get_current_user
+from tasks import write_audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ async def read_todo(user: user_dependency, db: db_dependency, todo_id: int = Pat
     return todo_model
 
 @router.post("/todo", status_code=status.HTTP_201_CREATED)
-async def create_todo(user: user_dependency, db: db_dependency, todo_request: TodoRequest):
+async def create_todo(user: user_dependency, db: db_dependency, todo_request: TodoRequest, background_tasks: BackgroundTasks):
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Auth failed.')
 
@@ -57,6 +58,8 @@ async def create_todo(user: user_dependency, db: db_dependency, todo_request: To
     db.add(todo_model)
     db.commit()
     logger.info("Todo created by user %s: '%s'", user.get('username'), todo_request.title)
+    background_tasks.add_task(write_audit_log, user.get('username'), "todo_created",
+                              f"title={todo_request.title}, priority={todo_request.priority}")
 
 @router.put("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def update_todo(user: user_dependency, db: db_dependency, todo_request: TodoRequest, todo_id: int = Path(gt=0)):
@@ -79,7 +82,7 @@ async def update_todo(user: user_dependency, db: db_dependency, todo_request: To
     logger.info("Todo %d updated by user %s", todo_id, user.get('username'))
 
 @router.delete("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_todo(user: user_dependency, db: db_dependency, todo_id: int = Path(gt=0)):
+async def delete_todo(user: user_dependency, db: db_dependency, background_tasks: BackgroundTasks, todo_id: int = Path(gt=0)):
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Auth failed.')
 
@@ -92,3 +95,5 @@ async def delete_todo(user: user_dependency, db: db_dependency, todo_id: int = P
     db.query(Todos).filter(Todos.id == todo_id).delete()
     db.commit()
     logger.info("Todo %d deleted by user %s", todo_id, user.get('username'))
+    background_tasks.add_task(write_audit_log, user.get('username'), "todo_deleted",
+                              f"todo_id={todo_id}")

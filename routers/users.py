@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 from starlette import status
@@ -9,6 +9,7 @@ from starlette import status
 from models import Users
 from database import SessionLocal
 from .auth import get_current_user
+from tasks import write_audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ async def get_user(user: user_dependency, db: db_dependency):
     return db.query(Users).filter(Users.id == user.get("id")).one_or_none()
 
 @router.put("/password", status_code=status.HTTP_204_NO_CONTENT)
-async def change_password(user: user_dependency, db: db_dependency, user_verification: UserVerification):
+async def change_password(user: user_dependency, db: db_dependency, user_verification: UserVerification, background_tasks: BackgroundTasks):
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
@@ -55,6 +56,7 @@ async def change_password(user: user_dependency, db: db_dependency, user_verific
     db.add(user_model)
     db.commit()
     logger.info("Password changed for user %s", user.get('username'))
+    background_tasks.add_task(write_audit_log, user.get('username'), "password_changed")
 
 @router.put("/change_phone_number/{phone_number}", status_code=status.HTTP_204_NO_CONTENT)
 async def change_phone_number(user: user_dependency, db: db_dependency, phone_number: str):

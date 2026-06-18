@@ -2,7 +2,7 @@ import logging
 from datetime import timedelta, datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
@@ -10,6 +10,7 @@ from starlette import status
 
 from database import SessionLocal
 from models import Users
+from tasks import write_audit_log
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 
@@ -74,7 +75,7 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Could not validate user')
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_user(db: db_dependency, create_user_request: CreateUserRequest):
+async def create_user(db: db_dependency, create_user_request: CreateUserRequest, background_tasks: BackgroundTasks):
     create_user_model = Users(
         username=create_user_request.username,
         email=create_user_request.email,
@@ -95,11 +96,13 @@ async def create_user(db: db_dependency, create_user_request: CreateUserRequest)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username or email already registered")
 
     logger.info("New user registered: %s", create_user_request.username)
+    background_tasks.add_task(write_audit_log, create_user_request.username, "user_registered",
+                              f"email={create_user_request.email}")
     return create_user_model
 
 @router.post("/token", response_model=Token)
 async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-                                 db: db_dependency):
+                                 db: db_dependency, background_tasks: BackgroundTasks):
     user = authenticate_user(form_data.username, form_data.password, db)
 
     if not user:
@@ -108,4 +111,5 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
 
     token = create_access_token(form_data.username, user.id, timedelta(minutes=30), user.role)
     logger.info("User logged in: %s", form_data.username)
+    background_tasks.add_task(write_audit_log, form_data.username, "user_login")
     return {'access_token': token, 'token_type': 'bearer'}

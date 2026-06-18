@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path
 from starlette import status
 
-from models import Todos
+from models import AuditLog, Todos
 from database import SessionLocal
 from .auth import get_current_user
 
@@ -44,3 +44,11 @@ async def delete_todo(user: user_dependency, db: db_dependency, todo_id: int = P
     db.query(Todos).filter(Todos.id == todo_id).delete()
     db.commit()
     logger.info("Admin %s deleted todo %d", user.get('username'), todo_id)
+
+
+@router.get("/audit", status_code=status.HTTP_200_OK)
+async def read_audit_log(user: user_dependency, db: db_dependency):
+    if user is None or user.get('user_role') != 'admin':
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admins only")
+    logger.info("Admin %s fetched audit log", user.get('username'))
+    return db.query(AuditLog).order_by(AuditLog.timestamp.desc()).all()

@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
 
 from database import Base
@@ -23,3 +25,13 @@ class Todos(Base):
     priority = Column(Integer)
     complete = Column(Boolean, default=False)
     owner_id = Column(Integer, ForeignKey('users.id'))
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id        = Column(Integer, primary_key=True, index=True)
+    username  = Column(String)
+    action    = Column(String)
+    detail    = Column(String, default="")
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
