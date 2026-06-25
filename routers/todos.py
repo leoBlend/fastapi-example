@@ -9,6 +9,7 @@ from models import Todos
 from database import SessionLocal
 from .auth import get_current_user
 from tasks import write_audit_log
+from embeddings import embed_text, todo_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,10 @@ async def create_todo(user: user_dependency, db: db_dependency, todo_request: To
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Auth failed.')
 
     todo_model = Todos(**todo_request.model_dump(), owner_id=user.get('id'))
+    # Compute the embedding synchronously so the vector is stored atomically with
+    # the row. (Could be moved to a background task, like write_audit_log below,
+    # once the flow is familiar — at the cost of a brief window with no vector.)
+    todo_model.embedding = embed_text(todo_to_text(todo_request.title, todo_request.description))
 
     db.add(todo_model)
     db.commit()
@@ -76,6 +81,8 @@ async def update_todo(user: user_dependency, db: db_dependency, todo_request: To
     todo_model.description = todo_request.description
     todo_model.priority = todo_request.priority
     todo_model.complete = todo_request.complete
+    # Title/description changed, so the meaning may have too — re-embed.
+    todo_model.embedding = embed_text(todo_to_text(todo_request.title, todo_request.description))
 
     db.add(todo_model)
     db.commit()

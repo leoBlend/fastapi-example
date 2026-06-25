@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette import status
 from database import engine
-from routers import auth, todos, admin, users
+from routers import auth, todos, admin, users, rag
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,6 +20,7 @@ app.include_router(auth.router)
 app.include_router(todos.router)
 app.include_router(admin.router)
 app.include_router(users.router)
+app.include_router(rag.router)
 
 
 @app.exception_handler(Exception)

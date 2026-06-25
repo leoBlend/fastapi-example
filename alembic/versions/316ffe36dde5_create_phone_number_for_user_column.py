@@ -1,7 +1,7 @@
 """Create phone_number for User column
 
 Revision ID: 316ffe36dde5
-Revises: 
+Revises: a0000000init
 Create Date: 2026-06-09 13:54:05.289927
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '316ffe36dde5'
-down_revision: Union[str, Sequence[str], None] = None
+down_revision: Union[str, Sequence[str], None] = 'a0000000init'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

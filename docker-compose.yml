@@ -1,0 +1,28 @@
+# Runs Postgres 16 with the pgvector extension pre-built, so the app has a real
+# database (and a vector store) without installing anything on your machine.
+#   docker compose up -d      # start in the background
+#   docker compose down       # stop (data survives in the named volume)
+#   docker compose down -v    # stop AND wipe the data volume
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: todoapp-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: todoapp
+    ports:
+      - "5432:5432"
+    volumes:
+      # Named volume → your todos/users persist across `docker compose down`.
+      - todoapp_pgdata:/var/lib/postgresql/data
+      # Runs once on first init: creates the separate test database.
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d todoapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  todoapp_pgdata:

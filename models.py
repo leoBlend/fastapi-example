@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from pgvector.sqlalchemy import Vector
 
 from database import Base
+
+# Dimension of the all-MiniLM-L6-v2 embedding model (see embeddings.py).
+EMBEDDING_DIM = 384
 
 class Users(Base):
     __tablename__ = "users"
@@ -25,6 +29,9 @@ class Todos(Base):
     priority = Column(Integer)
     complete = Column(Boolean, default=False)
     owner_id = Column(Integer, ForeignKey('users.id'))
+    # The semantic embedding of this todo's title+description. Nullable so a todo
+    # can exist before its vector is computed (and for backfilling old rows).
+    embedding = Column(Vector(EMBEDDING_DIM), nullable=True)
 
 
 class AuditLog(Base):

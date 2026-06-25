@@ -1,0 +1,32 @@
+# Web framework + server
+fastapi
+uvicorn[standard]
+
+# ORM + migrations
+sqlalchemy
+alembic
+
+# Validation
+pydantic
+
+# Auth
+passlib[bcrypt]
+python-jose[cryptography]
+python-multipart
+bcrypt
+
+# Postgres driver + pgvector SQLAlchemy types
+psycopg2-binary
+pgvector
+
+# Config
+python-dotenv
+
+# RAG: local embeddings + Claude generation
+sentence-transformers
+anthropic
+
+# Testing
+pytest
+pytest-asyncio
+httpx

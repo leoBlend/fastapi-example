@@ -1,13 +1,18 @@
 import sys
 import os
+import hashlib
+import struct
 from datetime import timedelta
 
 import pytest
+from dotenv import load_dotenv
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, StaticPool
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+load_dotenv()
 
 from database import Base
 from main import app
@@ -16,19 +21,23 @@ from routers.auth import get_db as auth_get_db, bcrypt_context, create_access_to
 from routers.todos import get_db as todos_get_db
 from routers.admin import get_db as admin_get_db
 from routers.users import get_db as users_get_db
+from routers.rag import get_db as rag_get_db
 
-SQLALCHEMY_TEST_DATABASE_URL = "sqlite:///./test_todo.db"
+# Tests run against a SEPARATE Postgres database (todoapp_test) so they never
+# touch your real data. The container must be up (`docker compose up -d`).
+SQLALCHEMY_TEST_DATABASE_URL = os.environ["TEST_DATABASE_URL"]
 
-test_engine = create_engine(
-    SQLALCHEMY_TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
+test_engine = create_engine(SQLALCHEMY_TEST_DATABASE_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 
 @pytest.fixture(scope="function")
 def db():
+    # The todos table has a pgvector column, so the extension must exist in the
+    # test database before we create the schema.
+    with test_engine.connect() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.commit()
     Base.metadata.create_all(bind=test_engine)
     session = TestingSessionLocal()
     try:
@@ -36,6 +45,45 @@ def db():
     finally:
         session.close()
         Base.metadata.drop_all(bind=test_engine)
+
+
+# --- RAG test doubles -------------------------------------------------------
+# Real embeddings load an ~80MB model; real /rag/ask calls Claude over the
+# network. Tests stub both so the suite stays fast and offline.
+
+EMBEDDING_DIM = 384
+
+
+def fake_embed(text_value: str) -> list[float]:
+    """Deterministic fake embedding: same text -> same vector, different text ->
+    different vector. Seeded from a hash so cosine_distance is stable and an
+    exact-text query ranks its own todo first (distance ~0)."""
+    digest = hashlib.sha256((text_value or "").encode("utf-8")).digest()
+    # Stretch the 32-byte digest into 384 floats deterministically.
+    raw = (digest * (EMBEDDING_DIM // len(digest) + 1))[:EMBEDDING_DIM]
+    return [b / 255.0 for b in raw]
+
+
+@pytest.fixture(autouse=True)
+def mock_embeddings(monkeypatch):
+    """Replace embed_text everywhere it's used so no model is loaded in tests."""
+    monkeypatch.setattr("embeddings.embed_text", fake_embed)
+    monkeypatch.setattr("routers.todos.embed_text", fake_embed)
+    monkeypatch.setattr("routers.rag.embed_text", fake_embed)
+
+
+@pytest.fixture
+def mock_claude(monkeypatch):
+    """Stub the Claude generation step; records what it was asked."""
+    calls = {}
+
+    def fake_answer(question, todos):
+        calls["question"] = question
+        calls["todos"] = [t.title for t in todos]
+        return f"STUB ANSWER for: {question}"
+
+    monkeypatch.setattr("rag_service.answer_question", fake_answer)
+    return calls
 
 
 @pytest.fixture(scope="function")
@@ -47,6 +95,7 @@ def client(db):
     app.dependency_overrides[todos_get_db] = override_get_db
     app.dependency_overrides[admin_get_db] = override_get_db
     app.dependency_overrides[users_get_db] = override_get_db
+    app.dependency_overrides[rag_get_db] = override_get_db
 
     with TestClient(app) as c:
         yield c
